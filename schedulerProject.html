@@ -22,9 +22,11 @@
         line-height: 1.6;
         color: var(--text-dark);
         background-color: #f5f7fa;
-        max-width: 1200px;
+        width: 100%;
+        min-width: 320px;
         margin: 0 auto;
         padding: 2rem;
+        box-sizing: border-box;
       }
       h1 {
         color: var(--primary-color);
@@ -711,11 +713,11 @@
       //round robin scheduling algorithm
       function calculateRoundRobin() {
         //inputs with decimal support
-        const cpuCount = parseFloat(document.getElementById("cpuCount").value);
+        const cpuCount = parseInt(document.getElementById("cpuCount").value);
         const timeQuantum = parseFloat(
           document.getElementById("timeQuantum").value
         );
-        const timePrecision = 1; //min time unit (0.1 for decimal, 1 for integer)
+        const timePrecision = 0.1; //using 0.1 for more precise timing like SRTN
 
         //inputs validation
         if (
@@ -730,7 +732,7 @@
           return;
         }
 
-        //reset job states
+        //reset job states - matching SRTN's immediate switch initialization
         jobs.forEach((job) => {
           job.remainingTime = parseFloat(job.burstTime);
           job.startTime = -1;
@@ -738,24 +740,28 @@
           job.turnaroundTime = 0;
           job.lastExecutionTime = -1;
           job.inQueue = false;
-          job.quantumUsed = 0; //tracking quantum usage
+          job.cpuStartTimes = new Array(cpuCount).fill(null); //start times per CPU like SRTN
         });
 
         let currentTime = 0;
         let completedJobs = 0;
-        let runningJobs = new Array(cpuCount).fill(null); //jobs on each CPU
-        let jobQueue = []; //ready queue
-        let cpuTimelines = new Array(cpuCount).fill().map(() => []); //execution timeline
-        let queueStates = {}; //to track queue state at each time point
+        let runningJobs = new Array(cpuCount).fill(null);
+        let jobQueue = [];
+        let cpuTimelines = new Array(cpuCount).fill().map(() => []);
+        let lastExecutionTimes = new Array(cpuCount).fill(null); //last execution per CPU
+        let queueStates = {};
 
-        //main loop
+        //main loop - matching SRTN's structure
         while (completedJobs < jobs.length) {
-          //add arriving jobs to queue with decimal arrival times
+          //jobs that just  finished their quantum at this time
+          const jobsFinishingNow = new Set();
+
+          //job arrivals
           jobs.forEach((job) => {
             if (
-              approximatelyEqual(job.arrivalTime, currentTime, timePrecision) &&
+              job.arrivalTime <= currentTime &&
               job.remainingTime > 0 &&
-              !jobQueue.includes(job) &&
+              !job.inQueue &&
               !runningJobs.includes(job)
             ) {
               jobQueue.push(job);
@@ -763,12 +769,41 @@
             }
           });
 
-          //record queue state at current time
-          queueStates[currentTime.toFixed(2)] = {
+          //CPU assignments with quantum tracking
+          for (let cpuIndex = 0; cpuIndex < cpuCount; cpuIndex++) {
+            //handling job completion
+            if (
+              runningJobs[cpuIndex] &&
+              runningJobs[cpuIndex].remainingTime <= 0
+            ) {
+              const completedJob = runningJobs[cpuIndex];
+              completedJob.endTime = parseFloat(currentTime.toFixed(1));
+              completedJob.turnaroundTime = parseFloat(
+                (completedJob.endTime - completedJob.arrivalTime).toFixed(1)
+              );
+              completedJobs++;
+              runningJobs[cpuIndex] = null;
+              lastExecutionTimes[cpuIndex] = null;
+            }
+
+            //quantum expiration - mark jobs that are finishing now
+            if (
+              runningJobs[cpuIndex] &&
+              lastExecutionTimes[cpuIndex] !== null &&
+              currentTime - lastExecutionTimes[cpuIndex] >= timeQuantum
+            ) {
+              jobsFinishingNow.add(runningJobs[cpuIndex].id);
+            }
+          }
+
+          //queue state with additional quantum tracking
+          queueStates[parseFloat(currentTime.toFixed(1))] = {
             queue: [
               ...jobQueue.map((job) => ({
                 id: job.id,
-                remaining: parseFloat(job.remainingTime.toFixed(2)),
+                remaining: job.remainingTime,
+                //tracking auxiliar
+                isNewArrival: job.arrivalTime === currentTime,
               })),
             ],
             running: [
@@ -776,111 +811,104 @@
                 .filter((job) => job !== null)
                 .map((job) => ({
                   id: job.id,
-                  remaining: parseFloat(job.remainingTime.toFixed(2)),
+                  remaining: job.remainingTime,
+                  //quantum progress
+                  quantumStart: lastExecutionTimes[runningJobs.indexOf(job)],
+                  isFinishing: jobsFinishingNow.has(job.id),
                 })),
             ],
+            //jobs are finishing at this exact time
+            jobsFinishing: Array.from(jobsFinishingNow),
           };
 
-          //handling CPU assignments and quantum management FIRST
-          for (let cpu = 0; cpu < cpuCount; cpu++) {
-            const currentJob = runningJobs[cpu];
-
-            //handle job completion/quantum expiration
-            if (currentJob) {
-              if (
-                approximatelyLessThanOrEqual(
-                  currentJob.remainingTime,
-                  0,
-                  timePrecision
-                )
-              ) {
-                //job completes
-                currentJob.endTime = currentTime;
-                currentJob.turnaroundTime =
-                  currentJob.endTime - currentJob.arrivalTime;
-                completedJobs++;
-                runningJobs[cpu] = null;
-              } else if (
-                approximatelyGreaterThanOrEqual(
-                  currentJob.quantumUsed,
-                  timeQuantum,
-                  timePrecision
-                )
-              ) {
-                //quantum expires (but job not done)
-                jobQueue.push(currentJob);
-                currentJob.inQueue = true;
-                currentJob.quantumUsed = 0; //reset quantum counter
-                runningJobs[cpu] = null;
-              }
-            }
-
-            //new job to CPU if available
-            if (runningJobs[cpu] === null && jobQueue.length > 0) {
-              const nextJob = jobQueue.shift();
-              nextJob.inQueue = false;
-              nextJob.quantumUsed = 0; //reset quantum counter
-
-              if (nextJob.startTime === -1) {
-                nextJob.startTime = currentTime;
-              }
-
-              runningJobs[cpu] = nextJob;
+          //handling the actual quantum expirations
+          for (let cpuIndex = 0; cpuIndex < cpuCount; cpuIndex++) {
+            if (jobsFinishingNow.has(runningJobs[cpuIndex]?.id)) {
+              const preemptedJob = runningJobs[cpuIndex];
+              jobQueue.push(preemptedJob);
+              preemptedJob.inQueue = true;
+              runningJobs[cpuIndex] = null;
+              lastExecutionTimes[cpuIndex] = null;
             }
           }
 
-          //THEN execute jobs and update timeline
-          for (let cpu = 0; cpu < cpuCount; cpu++) {
-            if (runningJobs[cpu]) {
-              const job = runningJobs[cpu];
-              const executionTime = Math.min(
-                timePrecision,
-                job.remainingTime,
-                timeQuantum - job.quantumUsed
-              );
+          //new jobs to CPUs
+          for (let cpuIndex = 0; cpuIndex < cpuCount; cpuIndex++) {
+            if (runningJobs[cpuIndex] === null && jobQueue.length > 0) {
+              const nextJob = jobQueue.shift();
+              if (nextJob.startTime === -1) {
+                nextJob.startTime = parseFloat(currentTime.toFixed(1));
+              }
+              nextJob.inQueue = false;
+              nextJob.lastExecutionTime = parseFloat(currentTime.toFixed(1));
+              runningJobs[cpuIndex] = nextJob;
+              lastExecutionTimes[cpuIndex] = parseFloat(currentTime.toFixed(1));
+            }
+          }
 
-              //record timeline segment
-              cpuTimelines[cpu].push({
-                start: currentTime,
-                end: currentTime + executionTime,
-                job: job.id,
-                remaining: parseFloat(
-                  (job.remainingTime - executionTime).toFixed(2)
-                ),
+          //executing jobs (0.1 time increments)
+          const timeIncrement = 0.1;
+          for (let cpuIndex = 0; cpuIndex < cpuCount; cpuIndex++) {
+            if (runningJobs[cpuIndex]) {
+              const currentJob = runningJobs[cpuIndex];
+              const executionStart = parseFloat(currentTime.toFixed(1));
+              let executionEnd, remainingAfterExecution;
+
+              //handling job completion
+              if (currentJob.remainingTime <= timeIncrement) {
+                executionEnd = parseFloat(
+                  (currentTime + currentJob.remainingTime).toFixed(1)
+                );
+                remainingAfterExecution = 0;
+              } else {
+                executionEnd = parseFloat(
+                  (currentTime + timeIncrement).toFixed(1)
+                );
+                remainingAfterExecution = parseFloat(
+                  (currentJob.remainingTime - timeIncrement).toFixed(1)
+                );
+              }
+
+              cpuTimelines[cpuIndex].push({
+                start: executionStart,
+                end: executionEnd,
+                job: currentJob.id,
+                remaining: remainingAfterExecution,
+                //quantum progress in the timeline
+                quantumStart: lastExecutionTimes[cpuIndex],
               });
 
-              //update job state
-              job.remainingTime -= executionTime;
-              job.quantumUsed += executionTime;
+              currentJob.remainingTime = remainingAfterExecution;
             }
           }
 
-          //increment time by the minimum time unit
-          currentTime += timePrecision;
-
-          //debugging
-          if (currentTime > 1000) {
-            showError("Simulation timeout - check for infinite loop");
-            break;
-          }
+          currentTime = parseFloat((currentTime + timeIncrement).toFixed(1));
         }
 
-        //update UI
+        //final job completion times - same as SRTN
+        jobs.forEach((job) => {
+          let lastSegment = null;
+          cpuTimelines.forEach((timeline) => {
+            timeline.forEach((segment) => {
+              if (
+                segment.job === job.id &&
+                (!lastSegment || segment.end > lastSegment.end)
+              ) {
+                lastSegment = segment;
+              }
+            });
+          });
+
+          if (lastSegment) {
+            job.endTime = parseFloat(lastSegment.end.toFixed(1));
+            job.turnaroundTime = parseFloat(
+              (job.endTime - job.arrivalTime).toFixed(1)
+            );
+          }
+        });
+
         updateJobTable();
         displayResults(cpuTimelines, queueStates, timeQuantum);
-      }
-
-      //helper functions for floating point comparisons
-      function approximatelyEqual(a, b, precision) {
-        return Math.abs(a - b) < precision;
-      }
-
-      function approximatelyLessThanOrEqual(a, b, precision) {
-        return a < b || approximatelyEqual(a, b, precision);
-      }
-
-      function approximatelyGreaterThanOrEqual(a, b, precision) {
-        return a > b || approximatelyEqual(a, b, precision);
       }
 
       //display results in the UI
@@ -996,8 +1024,8 @@
         const maxTime = Math.max(...sortedTimePoints, 10);
 
         //scaling to fit timeline in window
-        const maxAvailableWidth = Math.min(window.innerWidth * 0.85, 1200); //85% width with max 1200px
-        const baseUnitWidth = 90; //for further window size customization
+        const maxAvailableWidth = Math.min(window.innerWidth * 0.95, 2450); //95% width with max 2450px
+        const baseUnitWidth = 200; //for further window size customization
         const totalTimeWidth = maxTime * baseUnitWidth;
         const scaleFactor = Math.min(
           1,
@@ -1006,7 +1034,7 @@
         const scaledWidth = totalTimeWidth * scaleFactor;
         const scaledUnit = baseUnitWidth * scaleFactor;
 
-        const labelAreaWidth = 90; //80px label + 10px padding
+        const labelAreaWidth = 200; //80px label + 10px padding
 
         //time ticks only at scheduling points (using scaled units)
         const timeTicksHTML = `
@@ -1108,7 +1136,7 @@
                                 .join("")}
                           </div>
                           <div class="timeline-ticks-container" style="margin-left: ${
-                            labelAreaWidth + 10
+                            labelAreaWidth / 2 + 10
                           }px; width: ${scaledWidth}px">
                               ${(() => {
                                 const placedReports = [];
@@ -1117,11 +1145,11 @@
                                     const leftPos = time * scaledUnit;
                                     const reportHtml =
                                       getCombinedQueueReport(time);
-                                    const reportWidth = scaledUnit * 1;
+                                    const reportWidth = scaledUnit * 0.2;
 
                                     //for overlaps with previous queue reports
                                     let verticalOffset = 0;
-                                    const minHorizontalGap = scaledUnit * 0.4; //min space between reports
+                                    const minHorizontalGap = scaledUnit * 0.05; //min space between reports
                                     for (const placed of placedReports) {
                                       const horizontalDistance = Math.abs(
                                         placed.left - leftPos
@@ -1138,7 +1166,7 @@
                                         //case: if reports are very close but not overlapping
                                         if (
                                           horizontalDistance >
-                                          reportWidth * 0.4
+                                          reportWidth * 0.2
                                         ) {
                                           verticalOffset = Math.min(
                                             verticalOffset,
@@ -1210,7 +1238,7 @@
                   width: 100%;
               }
               .cpu-label {
-                  width: ${labelAreaWidth}px;
+                  width: ${labelAreaWidth / 2}px;
                   padding-right: 10px;
                   text-align: right;
                   flex-shrink: 0;
@@ -1268,9 +1296,9 @@
 
               .tick-label {
                   position: absolute;
-                  top: 12px;
+                  top: 16px;
                   transform: translateX(-50%);
-                  font-size: 12px;
+                  font-size: 14px;
                   white-space: nowrap;
               }
               .tick-group {
@@ -1295,7 +1323,7 @@
                   left: 50%;
                   transform: translateX(-50%);
                   font-family: monospace;
-                  font-size: 7px;
+                  font-size: 12.5px;
                   color: #333;
                   line-height: 1.2;
                   white-space: normal;
@@ -1352,11 +1380,14 @@
 
           if (!state) return "";
 
-          // Format queue jobs (only non-zero remaining)
+          const EPSILON = 0.0001;
+          const runningIds = new Set((state.running || []).map((j) => j.id));
+
+          //queue jobs that are not currently running
           const queueJobs =
             state.queue && state.queue.length > 0
               ? state.queue
-                  .filter((j) => j.remaining > 0)
+                  .filter((j) => j.remaining > 0 && !runningIds.has(j.id))
                   .map(
                     (j) =>
                       `<div class="job-entry">J${j.id} ${j.remaining.toFixed(
@@ -1366,39 +1397,50 @@
                   .join("")
               : "";
 
-          // Format running jobs (only non-zero remaining)
-          const runningJobs =
+          //show running jobs that are marked as finishing
+          const runningJobsToShow =
             state.running && state.running.length > 0
               ? state.running
-                  .filter((j) => j.remaining > 0)
+                  .filter(
+                    (j) =>
+                      j.remaining > 0 &&
+                      (j.isFinishing ||
+                        (state.jobsFinishing &&
+                          state.jobsFinishing.includes(j.id)))
+                  )
                   .map(
                     (j) =>
-                      `<div class="job-entry running-job">J${
+                      `<div class="job-entry finishing-job">J${
                         j.id
                       } ${j.remaining.toFixed(1)}</div>`
                   )
                   .join("")
               : "";
 
-          // Determine if we should show empty marker
-          const showEmptyMarker =
-            (!queueJobs || queueJobs.length === 0) &&
-            (!runningJobs || runningJobs.length === 0);
+          //debug logs
+          // console.log(`[Time ${time}] Queue Report Analysis:`);
+          // console.log("State running jobs:", state.running);
+          // console.log(
+          //   "Jobs marked as finishing in state:",
+          //   state.jobsFinishing
+          // );
+          // console.log("Queue jobs to show:", queueJobs);
+          // console.log("Running jobs to show:", runningJobsToShow);
 
           return `
-              ${
-                queueJobs
-                  ? queueJobs
-                  : runningJobs
-                  ? ""
-                  : '<div class="job-entry">[]</div>'
-              }
-              ${runningJobs}
-          `;
+    ${
+      queueJobs
+        ? queueJobs
+        : runningJobsToShow
+        ? ""
+        : '<div class="job-entry">[]</div>'
+    }
+    ${runningJobsToShow}
+  `;
         }
       }
 
-      // Initialize with 2 jobs when page loads
+      //initialize with 2 jobs when page loads
       window.onload = function () {
         addJob();
         addJob();
