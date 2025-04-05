@@ -206,9 +206,6 @@
         background-color: #e0e0e0;
         color: #333;
       }
-      .time-block.idle:after {
-        content: "IDLE";
-      }
 
       @media (max-width: 768px) {
         body {
@@ -325,21 +322,25 @@
         jobs.forEach((job, index) => {
           const row = tableBody.insertRow();
           row.innerHTML = `<td>J${job.id}</td>
-                    <td><input type="number" value="${
-                      job.arrivalTime
-                    }" min="0" step="0.1" onchange="validateNumberInput(this); updateJobProperty(${index}, 'arrivalTime', this.value)"></td>
-                    <td><input type="number" value="${
-                      job.burstTime
-                    }" min="0.1" step="0.1" onchange="validateNumberInput(this); updateJobProperty(${index}, 'burstTime', this.value)"></td>
-                    <td>${
-                      job.startTime === -1 ? "-" : job.startTime.toFixed(1)
-                    }</td>
-                    <td>${job.endTime === 0 ? "-" : job.endTime.toFixed(1)}</td>
-                    <td>${
-                      job.turnaroundTime === 0
-                        ? "-"
-                        : job.turnaroundTime.toFixed(1)
-                    }</td>`;
+                          <td><input type="number" value="${
+                            job.arrivalTime
+                          }" min="0" step="0.1" onchange="validateNumberInput(this); updateJobProperty(${index}, 'arrivalTime', this.value)"></td>
+                          <td><input type="number" value="${
+                            job.burstTime
+                          }" min="0.1" step="0.1" onchange="validateNumberInput(this); updateJobProperty(${index}, 'burstTime', this.value)"></td>
+                          <td>${
+                            job.startTime === -1
+                              ? "-"
+                              : job.startTime.toFixed(1)
+                          }</td>
+                          <td>${
+                            job.endTime === 0 ? "-" : job.endTime.toFixed(1)
+                          }</td>
+                          <td>${
+                            job.turnaroundTime === 0
+                              ? "-"
+                              : job.turnaroundTime.toFixed(1)
+                          }</td>`;
         });
       }
 
@@ -709,126 +710,173 @@
       //////////////////////////
       //round robin scheduling algorithm
       function calculateRoundRobin() {
-        //inputs
-        const cpuCount = parseInt(document.getElementById("cpuCount").value);
-        const timeQuantum = parseInt(
-          document.getElementById("timeQuantum").value
-        );
+    //inputs with decimal support
+    const cpuCount = parseFloat(document.getElementById("cpuCount").value);
+    const timeQuantum = parseFloat(
+      document.getElementById("timeQuantum").value
+    );
+    const timePrecision = 1; //min time unit (0.1 for decimal, 1 for integer)
 
-        //reset job states
-        jobs.forEach((job) => {
-          job.remainingTime = job.burstTime;
-          job.startTime = -1;
-          job.endTime = 0;
-          job.turnaroundTime = 0;
-          job.lastExecutionTime = -1;
-          job.inQueue = false;
-          job.quantumUsed = 0; //tracking quantum usage
-        });
+    //inputs validation
+    if (
+      isNaN(cpuCount) ||
+      cpuCount <= 0 ||
+      isNaN(timeQuantum) ||
+      timeQuantum <= 0
+    ) {
+      showError(
+        "Invalid input: CPU count and time quantum must be positive numbers"
+      );
+      return;
+    }
 
-        let currentTime = 0;
-        let completedJobs = 0;
-        let runningJobs = new Array(cpuCount).fill(null); //jobs on each CPU
-        let jobQueue = []; //ready
-        let cpuTimelines = new Array(cpuCount).fill().map(() => []); //execution timeline
-        let queueStates = {}; //to track queue state at each time unit
+    //reset job states
+    jobs.forEach((job) => {
+      job.remainingTime = parseFloat(job.burstTime);
+      job.startTime = -1;
+      job.endTime = 0;
+      job.turnaroundTime = 0;
+      job.lastExecutionTime = -1;
+      job.inQueue = false;
+      job.quantumUsed = 0; //tracking quantum usage
+    });
 
-        //main loop
-        while (completedJobs < jobs.length) {
-          //add new job to queue at the start of each time unit
-          jobs.forEach((job) => {
-            if (job.arrivalTime === currentTime && job.remainingTime > 0) {
-              jobQueue.push(job);
-              job.inQueue = true;
-            }
+    let currentTime = 0;
+    let completedJobs = 0;
+    let runningJobs = new Array(cpuCount).fill(null); //jobs on each CPU
+    let jobQueue = []; //ready queue
+    let cpuTimelines = new Array(cpuCount).fill().map(() => []); //execution timeline
+    let queueStates = {}; //to track queue state at each time point
+
+    //main loop
+    while (completedJobs < jobs.length) {
+      //add arriving jobs to queue with decimal arrival times
+      jobs.forEach((job) => {
+        if (
+          approximatelyEqual(job.arrivalTime, currentTime, timePrecision) &&
+          job.remainingTime > 0 &&
+          !jobQueue.includes(job) &&
+          !runningJobs.includes(job)
+        ) {
+          jobQueue.push(job);
+          job.inQueue = true;
+        }
+      });
+
+      //record queue state at current time
+      queueStates[currentTime.toFixed(2)] = {
+        queue: [
+          ...jobQueue.map((job) => ({
+            id: job.id,
+            remaining: parseFloat(job.remainingTime.toFixed(2)),
+          })),
+        ],
+        running: [
+          ...runningJobs
+            .filter((job) => job !== null)
+            .map((job) => ({
+              id: job.id,
+              remaining: parseFloat(job.remainingTime.toFixed(2)),
+            })),
+        ],
+      };
+
+      // Handle CPU assignments and quantum management FIRST
+      for (let cpu = 0; cpu < cpuCount; cpu++) {
+        const currentJob = runningJobs[cpu];
+
+        //handle job completion/quantum expiration
+        if (currentJob) {
+          if (approximatelyLessThanOrEqual(
+            currentJob.remainingTime,
+            0,
+            timePrecision
+          )) {
+            // Job completes
+            currentJob.endTime = currentTime;
+            currentJob.turnaroundTime =
+              currentJob.endTime - currentJob.arrivalTime;
+            completedJobs++;
+            runningJobs[cpu] = null;
+          } else if (approximatelyGreaterThanOrEqual(
+            currentJob.quantumUsed,
+            timeQuantum,
+            timePrecision
+          )) {
+            // Quantum expires (but job not done)
+            jobQueue.push(currentJob);
+            currentJob.inQueue = true;
+            currentJob.quantumUsed = 0; // Reset quantum counter
+            runningJobs[cpu] = null;
+          }
+        }
+
+        //new job to CPU if available
+        if (runningJobs[cpu] === null && jobQueue.length > 0) {
+          const nextJob = jobQueue.shift();
+          nextJob.inQueue = false;
+          nextJob.quantumUsed = 0; // Reset quantum counter
+
+          if (nextJob.startTime === -1) {
+            nextJob.startTime = currentTime;
+          }
+
+          runningJobs[cpu] = nextJob;
+        }
+      }
+
+      // THEN execute jobs and update timeline
+      for (let cpu = 0; cpu < cpuCount; cpu++) {
+        if (runningJobs[cpu]) {
+          const job = runningJobs[cpu];
+          const executionTime = Math.min(
+            timePrecision,
+            job.remainingTime,
+            timeQuantum - job.quantumUsed
+          );
+
+          //record timeline segment
+          cpuTimelines[cpu].push({
+            start: currentTime,
+            end: currentTime + executionTime,
+            job: job.id,
+            remaining: parseFloat(
+              (job.remainingTime - executionTime).toFixed(2)
+            ),
           });
 
-          //rcord queue state at current time
-          queueStates[currentTime] = {
-            queue: [
-              ...jobQueue.map((job) => ({
-                id: job.id,
-                remaining: job.remainingTime,
-              })),
-            ],
-            running: [
-              ...runningJobs
-                .filter((j) => j !== null)
-                .map((job) => ({ id: job.id, remaining: job.remainingTime })),
-            ],
-          };
-
-          //CPU assignments in priority order (CPU1 first)
-          for (let i = 0; i < cpuCount; i++) {
-            //current job has completed or quantum expired
-            if (
-              runningJobs[i] &&
-              (runningJobs[i].remainingTime <= 0 ||
-                runningJobs[i].quantumUsed >= timeQuantum)
-            ) {
-              const job = runningJobs[i];
-              if (job.remainingTime > 0) {
-                jobQueue.push(job); //add back to queue if not complete
-                job.inQueue = true;
-              } else {
-                //completed, record info
-                job.endTime = currentTime;
-                job.turnaroundTime = currentTime - job.arrivalTime;
-                completedJobs++;
-              }
-              runningJobs[i] = null; //free cpu
-            }
-
-            //new job to CPU1 first, then CPU2 if available
-            if (runningJobs[i] === null && jobQueue.length > 0) {
-              const job = jobQueue.shift();
-              job.inQueue = false;
-              job.quantumUsed = 0; //reset quantum counter
-              if (job.startTime === -1) {
-                job.startTime = currentTime;
-              }
-              runningJobs[i] = job;
-
-              //j3 segments, prioritize CPU1
-              if (job.id === 3 && currentTime >= 7 && i === 1) {
-                //move to other CPU if it's available
-                if (runningJobs[0] === null) {
-                  runningJobs[i] = null;
-                  runningJobs[0] = job;
-                  i = -1; //restart CPU assignment
-                }
-              }
-            }
-          }
-
-          //run current jobs and record timeline
-          for (let i = 0; i < cpuCount; i++) {
-            if (runningJobs[i]) {
-              const job = runningJobs[i];
-
-              cpuTimelines[i].push({
-                start: currentTime,
-                end: currentTime + 1,
-                job: job.id,
-                remaining: job.remainingTime - 1,
-              });
-
-              job.remainingTime--;
-              job.quantumUsed++;
-            }
-          }
-
-          currentTime++;
-          //debugging
-          if (currentTime > 1000) {
-            showError("Simulation timeout - check for infinite loop");
-            break;
-          }
-          ////////////
+          //update job state
+          job.remainingTime -= executionTime;
+          job.quantumUsed += executionTime;
         }
-        //update UI
-        updateJobTable();
-        displayResults(cpuTimelines, queueStates, timeQuantum);
+      }
+
+      //increment time by the minimum time unit
+      currentTime += timePrecision;
+
+      //debugging
+      if (currentTime > 1000) {
+        showError("Simulation timeout - check for infinite loop");
+        break;
+      }
+    }
+
+    //update UI
+    updateJobTable();
+    displayResults(cpuTimelines, queueStates, timeQuantum);
+  }
+
+      //helper functions for floating point comparisons
+      function approximatelyEqual(a, b, precision) {
+        return Math.abs(a - b) < precision;
+      }
+
+      function approximatelyLessThanOrEqual(a, b, precision) {
+        return a < b || approximatelyEqual(a, b, precision);
+      }
+
+      function approximatelyGreaterThanOrEqual(a, b, precision) {
+        return a > b || approximatelyEqual(a, b, precision);
       }
 
       //display results in the UI
@@ -845,9 +893,11 @@
         const averageTurnaroundTime = totalTurnaroundTime / jobs.length;
         //display calculation
         document.getElementById("averageTurnaroundTime").innerHTML = `
-        <p><strong>Average Turnaround Time:</strong> ${turnaroundTimes.join(
-          " + "
-        )} / ${jobs.length} = <b>${averageTurnaroundTime.toFixed(2)}</b></p>`;
+              <p><strong>Average Turnaround Time:</strong> ${turnaroundTimes.join(
+                " + "
+              )} / ${jobs.length} = <b>${averageTurnaroundTime.toFixed(
+          2
+        )}</b></p>`;
 
         //grouping small job segments since they are being partition by decimals
         const displayTimelines = cpuTimelines.map((timeline) => {
@@ -855,8 +905,7 @@
           let currentSegment = null;
 
           timeline.forEach((segment) => {
-            //new segment if:
-            //first segment, different job, gap between segements (decimlas issues)
+            //put together segments
             if (
               !currentSegment ||
               currentSegment.job !== segment.job ||
@@ -876,7 +925,30 @@
           });
 
           if (currentSegment) consolidated.push(currentSegment);
-          return consolidated;
+
+          //splitting any segments longer than quantum for visual display only
+          const visuallySplitTimeline = [];
+          consolidated.forEach((segment) => {
+            if (segment.job !== null && segment.end - segment.start > quantum) {
+              // Split into quantum-sized chunks for display
+              let start = segment.start;
+              while (start < segment.end) {
+                const chunkEnd = Math.min(start + quantum, segment.end);
+                visuallySplitTimeline.push({
+                  start: start,
+                  end: chunkEnd,
+                  job: segment.job,
+                  remaining: segment.remaining, //remaining time. disabled for now
+                });
+                start = chunkEnd;
+              }
+            } else {
+              //small segments as-is
+              visuallySplitTimeline.push(segment);
+            }
+          });
+
+          return visuallySplitTimeline;
         });
 
         //get all scheduling points (quantum boundaries and job completions)
@@ -921,9 +993,12 @@
 
         //scaling to fit timeline in window
         const maxAvailableWidth = Math.min(window.innerWidth * 0.85, 1200); //85% width with max 1200px
-        const baseUnitWidth = 40;
+        const baseUnitWidth = 80; //for further window size customization
         const totalTimeWidth = maxTime * baseUnitWidth;
-        const scaleFactor = Math.min(1, (maxAvailableWidth - 90) / totalTimeWidth); //label area
+        const scaleFactor = Math.min(
+          1,
+          (maxAvailableWidth - 90) / totalTimeWidth
+        ); //label area
         const scaledWidth = totalTimeWidth * scaleFactor;
         const scaledUnit = baseUnitWidth * scaleFactor;
 
@@ -931,248 +1006,392 @@
 
         //time ticks only at scheduling points (using scaled units)
         const timeTicksHTML = `
-            <div class="timeline-ticks" style="width: ${scaledWidth}px">
-                ${sortedTimePoints
-                .map(
-                    (time) => `
-                    <div class="tick" style="left: ${time * scaledUnit}px"></div>
-                    <div class="tick-label" style="left: ${
-                    time * scaledUnit
-                    }px">${time.toFixed(1)}</div>
-                `
-                )
-                .join("")}
-            </div>`;
+                  <div class="timeline-ticks" style="width: ${scaledWidth}px">
+                      ${sortedTimePoints
+                        .map(
+                          (time) => `
+                          <div class="tick" style="left: ${
+                            time * scaledUnit
+                          }px"></div>
+                          <div class="tick-label" style="left: ${
+                            time * scaledUnit
+                          }px">${time.toFixed(1)}</div>
+                      `
+                        )
+                        .join("")}
+                  </div>`;
 
-                const colors = [
-                "#FF6B6B",
-                "#4ECDC4",
-                "#45B7D1",
-                "#FFA07A",
-                "#98D8C8",
-                "#F67280",
-                "#C06C84",
-                ];
+        const colors = [
+          "#FF6B6B",
+          "#4ECDC4",
+          "#45B7D1",
+          "#FFA07A",
+          "#98D8C8",
+          "#F67280",
+          "#C06C84",
+        ];
 
-                //timeline visualization (using scaled units)
-                let timelineHTML = `
-                <h3>CPU Utilization Timeline</h3>
-                <div class="timeline-master-container">
-                    <div class="timeline-scrollable-area">
-                        <div class="timeline-outer-container" style="width: ${scaledWidth + labelAreaWidth}px">
-                            <div class="timeline-content-container">
-                                ${displayTimelines.map((timeline, cpuIndex) => `
-                                    <div class="cpu-row">
-                                        <div class="cpu-label">CPU ${cpuIndex + 1}:</div>
-                                        <div class="cpu-bar-container" style="width: ${scaledWidth}px">
-                                            <div class="cpu-bar">
-                                                ${timeline.map((segment) => {
-                                                    const width = (segment.end - segment.start) * scaledUnit;
-                                                    if (segment.job === null) {
-                                                        return `<div class="time-block idle" 
-                                                            style="width: ${width}px; left: ${segment.start * scaledUnit}px"
-                                                            title="Idle (${segment.start.toFixed(1)}-${segment.end.toFixed(1)})">
-                                                            IO<div class="segment-end" style="left: ${width}px"></div>
-                                                        </div>`;
-                                                    } else {
-                                                        return `<div class="time-block" 
-                                                            style="background-color: ${colors[segment.job % colors.length]};
-                                                            width: ${width}px; left: ${segment.start * scaledUnit}px"
-                                                            title="J${segment.job} (${segment.start.toFixed(1)}-${segment.end.toFixed(1)}) Remaining: ${segment.remaining.toFixed(1)}">
-                                                            J${segment.job}<div class="segment-end" style="left: ${width}px"></div>
-                                                        </div>`;
-                                                    }
-                                                }).join('')}
-                                            </div>
-                                        </div>
-                                    </div>
-                                `).join('')}
-                            </div>
-                            <div class="timeline-ticks-container" style="width: ${scaledWidth}px; left: ${labelAreaWidth}px">
-                                ${sortedTimePoints.map(time => `
-                                    <div class="tick" style="left: ${time * scaledUnit}px"></div>
-                                    <div class="tick-label" style="left: ${time * scaledUnit}px">${time.toFixed(1)}</div>
-                                `).join('')}
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="queue-timeline">
-                        <h4>Queue State at Scheduling Points</h4>
-                        <div class="queue-states-container">
-                            ${sortedTimePoints
-                            .map((time) => {
-                                //check for different time formats
-                                const state =
-                                queueStates[time.toFixed(2)] ||
-                                queueStates[time.toFixed(1)] ||
-                                queueStates[time.toString()];
+        //timeline visualization (using scaled units)
+        //first it sets the bar build space
+        //then for each segment that I put together before in the displayTimelines func make a subblock
+        let timelineHTML = `
+              <h3>CPU Utilization Timeline</h3>
+              <div class="timeline-master-container">
+                  <div class="timeline-scrollable-area">
+                      <div class="timeline-outer-container" style="width: ${
+                        scaledWidth + labelAreaWidth
+                      }px">
+                          <div class="timeline-content-container">
+                              ${displayTimelines
+                                .map(
+                                  (timeline, cpuIndex) => `
+                                  <div class="cpu-row">
+                                      <div class="cpu-label">CPU ${
+                                        cpuIndex + 1
+                                      }:</div>
+                                      <div class="cpu-bar-container" style="width: ${scaledWidth}px">
+                                          <div class="cpu-bar">
+                                              ${timeline
+                                                .map((segment) => {
+                                                  const width =
+                                                    (segment.end -
+                                                      segment.start) *
+                                                    scaledUnit;
+                                                  if (segment.job === null) {
+                                                    return `<div class="time-block idle"
+                                                          style="width: ${width}px; left: ${
+                                                      segment.start * scaledUnit
+                                                    }px"
+                                                          title="Idle (${segment.start.toFixed(
+                                                            1
+                                                          )}-${segment.end.toFixed(
+                                                      1
+                                                    )})">
+                                                          IO<div class="segment-end" style="left: ${width}px"></div>
+                                                      </div>`;
+                                                  } else {
+                                                    return `<div class="time-block"
+                                                          style="background-color: ${
+                                                            colors[
+                                                              segment.job %
+                                                                colors.length
+                                                            ]
+                                                          };
+                                                          width: ${width}px; left: ${
+                                                      segment.start * scaledUnit
+                                                    }px"
+                                                          title="J${
+                                                            segment.job
+                                                          } (${segment.start.toFixed(
+                                                      1
+                                                    )}-${segment.end.toFixed(
+                                                      1
+                                                    )}) ${
+                                                      segment.remaining < 0
+                                                        ? "IO"
+                                                        : ""
+                                                    }">
+                                                          J${segment.job}
+                                                      </div>`;
+                                                  }
+                                                })
+                                                .join("")}
+                                          </div>
+                                      </div>
+                                  </div>
+                              `
+                                )
+                                .join("")}
+                          </div>
+                          <div class="timeline-ticks-container" style="margin-left: ${
+                            labelAreaWidth + 10
+                          }px; width: ${scaledWidth}px">
+                              ${(() => {
+                                const placedReports = [];
+                                return sortedTimePoints
+                                  .map((time) => {
+                                    const leftPos = time * scaledUnit;
+                                    const reportHtml =
+                                      getCombinedQueueReport(time);
+                                    const reportWidth = scaledUnit * 1;
 
-                                if (!state) return "";
+                                    //for overlaps with previous queue reports
+                                    let verticalOffset = 0;
+                                    const minHorizontalGap = scaledUnit * 0.4; //min space between reports
+                                    for (const placed of placedReports) {
+                                      const horizontalDistance = Math.abs(
+                                        placed.left - leftPos
+                                      );
 
-                                //SRTN (no running property) - round robin cases (uses them)
-                                const queueJobs =
-                                state.queue && state.queue.length > 0
-                                    ? state.queue
-                                        .map((j) => `J${j.id}=${j.remaining.toFixed(1)}`)
-                                        .join(", ")
-                                    : "Empty";
-                                //format running jobs
-                                const runningJobs =
-                                state.running && state.running.length > 0
-                                    ? state.running
-                                        .map((j) => `J${j.id}=${j.remaining.toFixed(1)}`)
-                                        .join(", ")
-                                    : "None";
-
-                                return `
-                                    <div class="queue-state-box">
-                                        <div class="queue-time">${time.toFixed(1)}</div>
-                                        <div class="queue-jobs"><strong>Queue:</strong> ${queueJobs}</div>
-                                        ${
-                                        state.running
-                                            ? `<div class="running-jobs"><strong>Running:</strong> ${runningJobs}</div>`
-                                            : ""
+                                      if (
+                                        horizontalDistance <
+                                        reportWidth + minHorizontalGap
+                                      ) {
+                                        verticalOffset = Math.max(
+                                          verticalOffset,
+                                          placed.offset + 30
+                                        );
+                                        //case: if reports are very close but not overlapping
+                                        if (
+                                          horizontalDistance >
+                                          reportWidth * 0.4
+                                        ) {
+                                          verticalOffset = Math.min(
+                                            verticalOffset,
+                                            0
+                                          ); //limit offset
                                         }
-                                    </div>
-                                `;
-                            })
-                            .filter(Boolean)
-                            .join("")}
-                        </div>
-                    </div>
-                </div>
-                
-                <style>
-                    .timeline-master-container {
-                        width: 100%;
-                        max-width: ${maxAvailableWidth}px;
-                        margin: 0 auto;
-                    }
-                    .timeline-scrollable-area {
-                        overflow-x: auto;
-                        width: 100%;
-                        padding-bottom: 15px; /* Space for scrollbar */
-                    }
-                    .timeline-outer-container {
-                        position: relative;
-                        min-height: ${(displayTimelines.length * 45) + 30}px; /* CPU rows + ticks container */
-                        width: ${scaledWidth + labelAreaWidth}px;
-                    }
-                    .timeline-content-container {
-                        display: flex;
-                        flex-direction: column;
-                    }
-                    .cpu-row {
-                        display: flex;
-                        align-items: center;
-                        margin-bottom: 5px;
-                        height: 40px;
-                        width: 100%;
-                    }
-                    .cpu-label {
-                        width: 80px;
-                        padding-right: 10px;
-                        text-align: right;
-                        flex-shrink: 0;
-                    }
-                    .cpu-bar-container {
-                        position: relative;
-                        height: 40px;
-                        width: ${scaledWidth}px;
-                        flex-shrink: 0;
-                    }
-                    .timeline-ticks-container {
-                        position: absolute;
-                        bottom: 0;
-                        height: 30px;
-                        border-top: 1px solid #ccc;
-                    }
-                    .cpu-bar {
-                        position: absolute;
-                        height: 40px;
-                        width: 100%;
-                        background-color: #f0f0f0;
-                        border-radius: 4px;
-                        overflow: visible;
-                    }
-                    .time-block {
-                        position: absolute;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        color: white;
-                        font-weight: bold;
-                        height: 40px;
-                        border-right: 1px solid white;
-                        transition: all 0.2s;
-                        min-width: ${Math.max(
-                        20 * scaleFactor,
-                        10
-                        )}px;
-                    }
-                    .time-block:hover {
-                        transform: scale(1.05);
-                        z-index: 1;
-                        box-shadow: 0 0 5px rgba(0,0,0,0.3);
-                    }
-                    .time-block.idle {
-                        background-color: #e0e0e0;
-                        color: #333;
-                    }
-                    .timeline-ticks {
-                        position: relative;
-                        height: 20px;
-                        margin-top: 10px;
-                        border-top: 1px solid #ccc;
-                    }
-                    .tick {
-                        position: absolute;
-                        top: 0;
-                        width: 1px;
-                        height: 10px;
-                        background-color: #333;
-                    }
-                    .tick-label {
-                        position: absolute;
-                        top: 12px;
-                        transform: translateX(-50%);
-                        font-size: 12px;
-                    }
-                    .queue-timeline {
-                        margin-top: 40px;
-                        border-top: 1px solid #ddd;
-                        padding-top: 15px;
-                    }
-                    .queue-states-container {
-                        display: flex;
-                        flex-wrap: wrap;
-                        gap: 10px;
-                        padding: 10px 0;
-                    }
-                    .queue-state-box {
-                        background: #f8f9fa;
-                        padding: 8px 12px;
-                        border-radius: 4px;
-                        border: 1px solid #dee2e6;
-                        min-width: 150px;
-                        max-width: 200px;
-                    }
-                    .queue-time {
-                        font-weight: bold;
-                        margin-bottom: 5px;
-                        color: #4361ee;
-                    }
-                    .queue-jobs, .running-jobs {
-                        font-family: monospace;
-                        font-size: 0.85em;
-                    }
-                    .running-jobs {
-                        color: #2e7d32;
-                        margin-top: 3px;
-                    }
-                </style>`;
+                                      }
+                                    }
+                                    placedReports.push({
+                                      left: leftPos,
+                                      offset: verticalOffset,
+                                    });
+
+                                    return `
+                                      <div class="tick-group">
+
+                                      <div class="tick" style="left: ${leftPos}px"></div>
+                                      <div class="tick-label" style="left: ${leftPos}px">${time.toFixed(
+                                      1
+                                    )}</div>
+                                      <div class="queue-report"
+                                          style="left: ${leftPos}px; top: ${
+                                      38 + verticalOffset
+                                    }px"
+                                          data-time="${time}"
+                                          data-offset="${verticalOffset}">
+                                          ${reportHtml}
+                                      </div>
+                                      </div>
+                                      `;
+                                  })
+                                  .join("");
+                              })()}
+                          </div>
+                      </div>
+                  </div>
+              </div>
+
+              <style>
+              .timeline-master-container {
+                  width: 100%;
+                  max-width: 100%;
+                  margin: 0 auto;
+                  min-height: ${displayTimelines.length * 55 + 60}px;
+              }
+              .timeline-scrollable-area {
+                  overflow-x: auto;
+                  width: 100%;
+                  padding-bottom: 15px;
+                  min-height: 300px;
+              }
+              .timeline-outer-container {
+                  position: relative;
+                  min-height: ${displayTimelines.length * 55 + 50}px;
+                  width: ${scaledWidth + labelAreaWidth}px;
+                  margin: 0;
+                  padding: 0;
+              }
+              .timeline-content-container {
+                  display: flex;
+                  flex-direction: column;
+                  margin-bottom: 0;
+              }
+              .cpu-row {
+                  display: flex;
+                  align-items: center;
+                  margin-bottom: 5px;
+                  height: 40px;
+                  width: 100%;
+              }
+              .cpu-label {
+                  width: ${labelAreaWidth}px;
+                  padding-right: 10px;
+                  text-align: right;
+                  flex-shrink: 0;
+              }
+              .cpu-bar-container {
+                  position: relative;
+                  height: 40px;
+                  width: ${scaledWidth}px;
+                  flex-shrink: 0;
+              }
+              .timeline-ticks-container {
+                  position: relative;
+                  height: 30px;
+                  width: ${scaledWidth}px;
+                  margin-left: ${labelAreaWidth}px;
+                  border-top: 1px solid #ccc;
+              }
+              .cpu-bar {
+                  position: absolute;
+                  height: 40px;
+                  width: 100%;
+                  background-color: #f0f0f0;
+                  border-radius: 4px;
+                  overflow: visible;
+              }
+              .time-block {
+                  position: absolute;
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  color: white;
+                  font-weight: bold;
+                  height: 40px;
+                  border-left: 0.5px solid black;
+                  border-right: 0.5px solid black;
+                  transition: all 0.2s;
+                  min-width: ${Math.max(20 * scaleFactor, 10)}px;
+              }
+              .time-block:hover {
+                  transform: scale(1.05);
+                  z-index: 1;
+                  box-shadow: 0 0 5px rgba(0,0,0,0.3);
+              }
+              .time-block.idle {
+                  background-color: #e0e0e0;
+                  color: #333;
+              }
+              .tick {
+                  position: absolute;
+                  top: 0;
+                  width: 1px;
+                  height: 10px;
+                  background-color: #333;
+              }
+
+              .tick-label {
+                  position: absolute;
+                  top: 12px;
+                  transform: translateX(-50%);
+                  font-size: 12px;
+                  white-space: nowrap;
+              }
+              .tick-group {
+                  display: inline-block;
+              }
+              .tick-group:hover .tick-label {
+                  color: #0066cc;
+                  font-weight: bold;
+                  transform: translateX(-50%) scale(1.1);
+                  z-index: 20;
+              }
+
+              .tick-group:hover .tick {
+
+                  height: 15px;
+                  background-color: #0066cc;
+              }
+              .queue-report {
+                  position: absolute;
+                  top: 15px;
+                  z-index: 2;
+                  left: 50%;
+                  transform: translateX(-50%);
+                  font-family: monospace;
+                  font-size: 7px;
+                  color: #333;
+                  line-height: 1.2;
+                  white-space: normal;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  background: rgba(255, 255, 255, 0.95);
+                  padding: 2px 4px;
+                  border-radius: 2px;
+                  max-width: ${scaledUnit * 2}px;
+                  font-weight: bold;
+                  z-index: 5;
+                  transition: all 0.2s ease;
+                  cursor: pointer;
+                  border: 1px solid rgba(0,0,0,0.1);
+              }
+              .queue-report:hover {
+                  z-index: 20;
+                  background: white;
+                  box-shadow: 0 0 5px rgba(0,0,0,0.3);
+                  max-width: none;
+                  white-space: normal;
+                  overflow: visible;
+                  transform: translateX(-50%) translateY(-5px);
+              }
+              .queue-report .queue-section,
+              .queue-report .running-section {
+                  display: block;
+              }
+              .queue-report .job-entry {
+                  display: block;
+                  margin: 0;
+                  padding: 0;
+                  white-space: nowrap;
+              }
+              .queue-report .queue-count {
+                  font-size: 6px;
+              }
+              </style>
+              `;
+
+        //style comments here to not mess with style block format..
+        //queue description not showing whole box when timeline becomes cluttered
+        //added to styles: tick group(to synchronize queue description and time label hover),
+        //queue report (to replace the previous queue description style), added hovers around
+        //if the queue description gets hovered, then hover this too
+
         document.getElementById("executionTimeline").innerHTML = timelineHTML;
+
+        function getCombinedQueueReport(time) {
+          const state =
+            queueStates[time.toFixed(2)] ||
+            queueStates[time.toFixed(1)] ||
+            queueStates[time.toString()];
+
+          if (!state) return "";
+
+          // Format queue jobs (only non-zero remaining)
+          const queueJobs =
+            state.queue && state.queue.length > 0
+              ? state.queue
+                  .filter((j) => j.remaining > 0)
+                  .map(
+                    (j) =>
+                      `<div class="job-entry">J${j.id} ${j.remaining.toFixed(
+                        1
+                      )}</div>`
+                  )
+                  .join("")
+              : "";
+
+          // Format running jobs (only non-zero remaining)
+          const runningJobs =
+            state.running && state.running.length > 0
+              ? state.running
+                  .filter((j) => j.remaining > 0)
+                  .map(
+                    (j) =>
+                      `<div class="job-entry running-job">J${
+                        j.id
+                      } ${j.remaining.toFixed(1)}</div>`
+                  )
+                  .join("")
+              : "";
+
+          // Determine if we should show empty marker
+          const showEmptyMarker =
+            (!queueJobs || queueJobs.length === 0) &&
+            (!runningJobs || runningJobs.length === 0);
+
+          return `
+              ${
+                queueJobs
+                  ? queueJobs
+                  : runningJobs
+                  ? ""
+                  : '<div class="job-entry">[]</div>'
+              }
+              ${runningJobs}
+          `;
+        }
       }
 
       // Initialize with 2 jobs when page loads
