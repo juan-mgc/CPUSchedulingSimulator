@@ -710,161 +710,165 @@
       //////////////////////////
       //round robin scheduling algorithm
       function calculateRoundRobin() {
-    //inputs with decimal support
-    const cpuCount = parseFloat(document.getElementById("cpuCount").value);
-    const timeQuantum = parseFloat(
-      document.getElementById("timeQuantum").value
-    );
-    const timePrecision = 1; //min time unit (0.1 for decimal, 1 for integer)
+        //inputs with decimal support
+        const cpuCount = parseFloat(document.getElementById("cpuCount").value);
+        const timeQuantum = parseFloat(
+          document.getElementById("timeQuantum").value
+        );
+        const timePrecision = 1; //min time unit (0.1 for decimal, 1 for integer)
 
-    //inputs validation
-    if (
-      isNaN(cpuCount) ||
-      cpuCount <= 0 ||
-      isNaN(timeQuantum) ||
-      timeQuantum <= 0
-    ) {
-      showError(
-        "Invalid input: CPU count and time quantum must be positive numbers"
-      );
-      return;
-    }
-
-    //reset job states
-    jobs.forEach((job) => {
-      job.remainingTime = parseFloat(job.burstTime);
-      job.startTime = -1;
-      job.endTime = 0;
-      job.turnaroundTime = 0;
-      job.lastExecutionTime = -1;
-      job.inQueue = false;
-      job.quantumUsed = 0; //tracking quantum usage
-    });
-
-    let currentTime = 0;
-    let completedJobs = 0;
-    let runningJobs = new Array(cpuCount).fill(null); //jobs on each CPU
-    let jobQueue = []; //ready queue
-    let cpuTimelines = new Array(cpuCount).fill().map(() => []); //execution timeline
-    let queueStates = {}; //to track queue state at each time point
-
-    //main loop
-    while (completedJobs < jobs.length) {
-      //add arriving jobs to queue with decimal arrival times
-      jobs.forEach((job) => {
+        //inputs validation
         if (
-          approximatelyEqual(job.arrivalTime, currentTime, timePrecision) &&
-          job.remainingTime > 0 &&
-          !jobQueue.includes(job) &&
-          !runningJobs.includes(job)
+          isNaN(cpuCount) ||
+          cpuCount <= 0 ||
+          isNaN(timeQuantum) ||
+          timeQuantum <= 0
         ) {
-          jobQueue.push(job);
-          job.inQueue = true;
-        }
-      });
-
-      //record queue state at current time
-      queueStates[currentTime.toFixed(2)] = {
-        queue: [
-          ...jobQueue.map((job) => ({
-            id: job.id,
-            remaining: parseFloat(job.remainingTime.toFixed(2)),
-          })),
-        ],
-        running: [
-          ...runningJobs
-            .filter((job) => job !== null)
-            .map((job) => ({
-              id: job.id,
-              remaining: parseFloat(job.remainingTime.toFixed(2)),
-            })),
-        ],
-      };
-
-      // Handle CPU assignments and quantum management FIRST
-      for (let cpu = 0; cpu < cpuCount; cpu++) {
-        const currentJob = runningJobs[cpu];
-
-        //handle job completion/quantum expiration
-        if (currentJob) {
-          if (approximatelyLessThanOrEqual(
-            currentJob.remainingTime,
-            0,
-            timePrecision
-          )) {
-            // Job completes
-            currentJob.endTime = currentTime;
-            currentJob.turnaroundTime =
-              currentJob.endTime - currentJob.arrivalTime;
-            completedJobs++;
-            runningJobs[cpu] = null;
-          } else if (approximatelyGreaterThanOrEqual(
-            currentJob.quantumUsed,
-            timeQuantum,
-            timePrecision
-          )) {
-            // Quantum expires (but job not done)
-            jobQueue.push(currentJob);
-            currentJob.inQueue = true;
-            currentJob.quantumUsed = 0; // Reset quantum counter
-            runningJobs[cpu] = null;
-          }
-        }
-
-        //new job to CPU if available
-        if (runningJobs[cpu] === null && jobQueue.length > 0) {
-          const nextJob = jobQueue.shift();
-          nextJob.inQueue = false;
-          nextJob.quantumUsed = 0; // Reset quantum counter
-
-          if (nextJob.startTime === -1) {
-            nextJob.startTime = currentTime;
-          }
-
-          runningJobs[cpu] = nextJob;
-        }
-      }
-
-      // THEN execute jobs and update timeline
-      for (let cpu = 0; cpu < cpuCount; cpu++) {
-        if (runningJobs[cpu]) {
-          const job = runningJobs[cpu];
-          const executionTime = Math.min(
-            timePrecision,
-            job.remainingTime,
-            timeQuantum - job.quantumUsed
+          showError(
+            "Invalid input: CPU count and time quantum must be positive numbers"
           );
+          return;
+        }
 
-          //record timeline segment
-          cpuTimelines[cpu].push({
-            start: currentTime,
-            end: currentTime + executionTime,
-            job: job.id,
-            remaining: parseFloat(
-              (job.remainingTime - executionTime).toFixed(2)
-            ),
+        //reset job states
+        jobs.forEach((job) => {
+          job.remainingTime = parseFloat(job.burstTime);
+          job.startTime = -1;
+          job.endTime = 0;
+          job.turnaroundTime = 0;
+          job.lastExecutionTime = -1;
+          job.inQueue = false;
+          job.quantumUsed = 0; //tracking quantum usage
+        });
+
+        let currentTime = 0;
+        let completedJobs = 0;
+        let runningJobs = new Array(cpuCount).fill(null); //jobs on each CPU
+        let jobQueue = []; //ready queue
+        let cpuTimelines = new Array(cpuCount).fill().map(() => []); //execution timeline
+        let queueStates = {}; //to track queue state at each time point
+
+        //main loop
+        while (completedJobs < jobs.length) {
+          //add arriving jobs to queue with decimal arrival times
+          jobs.forEach((job) => {
+            if (
+              approximatelyEqual(job.arrivalTime, currentTime, timePrecision) &&
+              job.remainingTime > 0 &&
+              !jobQueue.includes(job) &&
+              !runningJobs.includes(job)
+            ) {
+              jobQueue.push(job);
+              job.inQueue = true;
+            }
           });
 
-          //update job state
-          job.remainingTime -= executionTime;
-          job.quantumUsed += executionTime;
+          //record queue state at current time
+          queueStates[currentTime.toFixed(2)] = {
+            queue: [
+              ...jobQueue.map((job) => ({
+                id: job.id,
+                remaining: parseFloat(job.remainingTime.toFixed(2)),
+              })),
+            ],
+            running: [
+              ...runningJobs
+                .filter((job) => job !== null)
+                .map((job) => ({
+                  id: job.id,
+                  remaining: parseFloat(job.remainingTime.toFixed(2)),
+                })),
+            ],
+          };
+
+          //handling CPU assignments and quantum management FIRST
+          for (let cpu = 0; cpu < cpuCount; cpu++) {
+            const currentJob = runningJobs[cpu];
+
+            //handle job completion/quantum expiration
+            if (currentJob) {
+              if (
+                approximatelyLessThanOrEqual(
+                  currentJob.remainingTime,
+                  0,
+                  timePrecision
+                )
+              ) {
+                //job completes
+                currentJob.endTime = currentTime;
+                currentJob.turnaroundTime =
+                  currentJob.endTime - currentJob.arrivalTime;
+                completedJobs++;
+                runningJobs[cpu] = null;
+              } else if (
+                approximatelyGreaterThanOrEqual(
+                  currentJob.quantumUsed,
+                  timeQuantum,
+                  timePrecision
+                )
+              ) {
+                //quantum expires (but job not done)
+                jobQueue.push(currentJob);
+                currentJob.inQueue = true;
+                currentJob.quantumUsed = 0; //reset quantum counter
+                runningJobs[cpu] = null;
+              }
+            }
+
+            //new job to CPU if available
+            if (runningJobs[cpu] === null && jobQueue.length > 0) {
+              const nextJob = jobQueue.shift();
+              nextJob.inQueue = false;
+              nextJob.quantumUsed = 0; //reset quantum counter
+
+              if (nextJob.startTime === -1) {
+                nextJob.startTime = currentTime;
+              }
+
+              runningJobs[cpu] = nextJob;
+            }
+          }
+
+          //THEN execute jobs and update timeline
+          for (let cpu = 0; cpu < cpuCount; cpu++) {
+            if (runningJobs[cpu]) {
+              const job = runningJobs[cpu];
+              const executionTime = Math.min(
+                timePrecision,
+                job.remainingTime,
+                timeQuantum - job.quantumUsed
+              );
+
+              //record timeline segment
+              cpuTimelines[cpu].push({
+                start: currentTime,
+                end: currentTime + executionTime,
+                job: job.id,
+                remaining: parseFloat(
+                  (job.remainingTime - executionTime).toFixed(2)
+                ),
+              });
+
+              //update job state
+              job.remainingTime -= executionTime;
+              job.quantumUsed += executionTime;
+            }
+          }
+
+          //increment time by the minimum time unit
+          currentTime += timePrecision;
+
+          //debugging
+          if (currentTime > 1000) {
+            showError("Simulation timeout - check for infinite loop");
+            break;
+          }
         }
+
+        //update UI
+        updateJobTable();
+        displayResults(cpuTimelines, queueStates, timeQuantum);
       }
-
-      //increment time by the minimum time unit
-      currentTime += timePrecision;
-
-      //debugging
-      if (currentTime > 1000) {
-        showError("Simulation timeout - check for infinite loop");
-        break;
-      }
-    }
-
-    //update UI
-    updateJobTable();
-    displayResults(cpuTimelines, queueStates, timeQuantum);
-  }
 
       //helper functions for floating point comparisons
       function approximatelyEqual(a, b, precision) {
@@ -993,7 +997,7 @@
 
         //scaling to fit timeline in window
         const maxAvailableWidth = Math.min(window.innerWidth * 0.85, 1200); //85% width with max 1200px
-        const baseUnitWidth = 80; //for further window size customization
+        const baseUnitWidth = 90; //for further window size customization
         const totalTimeWidth = maxTime * baseUnitWidth;
         const scaleFactor = Math.min(
           1,
