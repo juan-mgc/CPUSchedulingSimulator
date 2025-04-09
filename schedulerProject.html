@@ -225,6 +225,9 @@
           flex-direction: column;
         }
       }
+      #srtnControlGroup {
+        transition: opacity 0.3s ease;
+      }
     </style>
   </head>
   <body>
@@ -246,18 +249,18 @@
         <input type="number" id="timeQuantum" min="0.1" value="1" step="0.1" />
       </div>
 
-      <div class="control-group">
+      <button onclick="addJob()">Add Job</button>
+      <button onclick="removeLastJob()">Remove Last Job</button>
+      <button onclick="calculateSRTN()">Calculate SRTN</button>
+      <button onclick="calculateRoundRobin()">Calculate Round Robin</button>
+
+      <div class="control-group" id="srtnControlGroup">
         <label for="srtnMode">SRTN Mode:</label>
         <select id="srtnMode">
           <option value="immediate">Immediately Continue Switch</option>
           <option value="quantum">Quantum Wait</option>
         </select>
       </div>
-
-      <button onclick="addJob()">Add Job</button>
-      <button onclick="removeLastJob()">Remove Last Job</button>
-      <button onclick="calculateSRTN()">Calculate SRTN</button>
-      <button onclick="calculateRoundRobin()">Calculate Round Robin</button>
     </div>
 
     <table id="jobTable">
@@ -486,7 +489,22 @@
         updateJobTable();
       }
       ///////////////////////////
+      function disableSRTNMode() {
+        const srtnGroup = document.getElementById("srtnControlGroup");
+        srtnGroup.style.opacity = "0.6";
+        document.getElementById("srtnMode").disabled = true;
+        srtnGroup.title = "This setting only applies to SRTN scheduling. RR always uses immediate continue.";
+      }
+
+      function enableSRTNMode() {
+        const srtnGroup = document.getElementById("srtnControlGroup");
+        srtnGroup.style.opacity = "1";
+        document.getElementById("srtnMode").disabled = false;
+        srtnGroup.title = "";
+      }
+
       function calculateSRTN() {
+        enableSRTNMode();
         //input values
         const cpuCountInput = document.getElementById("cpuCount");
         const quantumInput = document.getElementById("timeQuantum");
@@ -712,6 +730,7 @@
       //////////////////////////
       //round robin scheduling algorithm
       function calculateRoundRobin() {
+        disableSRTNMode();
         //inputs with decimal support
         const cpuCount = parseInt(document.getElementById("cpuCount").value);
         const timeQuantum = parseFloat(
@@ -1099,7 +1118,7 @@
                                                           )}-${segment.end.toFixed(
                                                       1
                                                     )})">
-                                                          IO<div class="segment-end" style="left: ${width}px"></div>
+                                                          Idle<div class="segment-end" style="left: ${width}px"></div>
                                                       </div>`;
                                                   } else {
                                                     return `<div class="time-block"
@@ -1444,6 +1463,7 @@
       window.onload = function () {
         addJob();
         addJob();
+        // disableSRTNMode(); //start by disabling the switch mode until the algorithm is selected
       };
     </script>
   </body>
