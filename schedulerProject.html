@@ -493,7 +493,8 @@
         const srtnGroup = document.getElementById("srtnControlGroup");
         srtnGroup.style.opacity = "0.6";
         document.getElementById("srtnMode").disabled = true;
-        srtnGroup.title = "This setting only applies to SRTN scheduling. RR always uses immediate continue.";
+        srtnGroup.title =
+          "This setting only applies to SRTN scheduling. RR always uses immediate continue.";
       }
 
       function enableSRTNMode() {
@@ -1089,6 +1090,56 @@
               <h3>CPU Utilization Timeline</h3>
               <div class="timeline-master-container">
                   <div class="timeline-scrollable-area">
+                      <div class="timeline-arrival-container" style="width: ${
+                          scaledWidth + labelAreaWidth
+                        }px">
+                          <div class="arrival-markers-wrapper" style="width: ${scaledWidth}px; margin-left: ${
+                            labelAreaWidth / 2 + 10
+                          }px">
+                              ${(() => {
+                                //grouping jobs by arrival time
+                                const arrivals = {};
+                                jobs.forEach((job) => {
+                                  if (!arrivals[job.arrivalTime]) {
+                                    arrivals[job.arrivalTime] = [];
+                                  }
+                                  arrivals[job.arrivalTime].push(job);
+                                });
+
+                                //markers for arrival time
+                                let html = "";
+                                Object.keys(arrivals)
+                                  .sort((a, b) => a - b)
+                                  .forEach((arrivalTime) => {
+                                    const time = parseFloat(arrivalTime);
+                                    const leftPos = time * scaledUnit;
+                                    const jobsAtTime = arrivals[arrivalTime];
+
+                                    //reversing the order for styling purposes
+                                    const reversedJobs = [...jobsAtTime].reverse();
+
+                                    html += `
+                                    <div class="arrival-marker-group" style="left: ${leftPos}px">
+                                    ${reversedJobs
+                                      .map(
+                                        (job, index) => `
+                                        <div class="arrival-job" style="bottom: ${
+                                          index * 18
+                                        }px">
+                                            <span>J${job.id}</span>
+                                        </div>
+                                        `
+                                      )
+                                      .join("")}
+                                      <div class="arrival-arrow"></div>
+                                    </div>
+                                    `;
+                                    });
+                                return html;
+                              })()}
+                          </div>
+                      </div>
+                      
                       <div class="timeline-outer-container" style="width: ${
                         scaledWidth + labelAreaWidth
                       }px">
@@ -1139,7 +1190,7 @@
                                                       1
                                                     )}) ${
                                                       segment.remaining < 0
-                                                        ? "IO"
+                                                        ? "Idle"
                                                         : ""
                                                     }">
                                                           J${segment.job}
@@ -1380,14 +1431,56 @@
               .queue-report .queue-count {
                   font-size: 6px;
               }
-              </style>
-              `;
+
+              .timeline-arrival-container {
+                  position: relative;
+                  height: auto;
+                  margin-bottom: 0;
+                  width: 100%;
+              }
+
+              .arrival-markers-wrapper {
+                  position: relative;
+                  height: 60px; /* Increased to accommodate stacked jobs */
+              }
+
+              .arrival-marker-group {
+                  position: absolute;
+                  bottom: 0;
+                  left: 0;
+                  transform: translateX(-50%);
+                  display: flex;
+                  flex-direction: column;
+                  align-items: center;
+                  z-index: 10;
+              }
+
+              .arrival-job {
+                  position: absolute;
+                  display: block;
+                  white-space: nowrap;
+                  text-align: center;
+                  margin-bottom: 2px;
+              }
+
+              .arrival-arrow {
+                  width: 0;
+                  height: 0;
+                  border-left: 5px solid transparent;
+                  border-right: 5px solid transparent;
+                  border-top: 8px solid #333;
+                  position: relative;
+                  top: 2px;
+              }
+            </style>
+          `;
 
         //style comments here to not mess with style block format..
         //queue description not showing whole box when timeline becomes cluttered
         //added to styles: tick group(to synchronize queue description and time label hover),
         //queue report (to replace the previous queue description style), added hovers around
         //if the queue description gets hovered, then hover this too
+        //after queue-report styling section is the configuration for arrival times
 
         document.getElementById("executionTimeline").innerHTML = timelineHTML;
 
