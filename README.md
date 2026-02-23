@@ -119,8 +119,8 @@ It emphasizes clarity and visualization of scheduling behavior rather than low-l
 Clone the repository:
 
 ```bash
-git clone https://github.com/<your-username>/<your-repo>.git
-cd <your-repo>
+git clone [https://github.com/juan-mgc/CPUSchedulingSimulator.git]
+cd CPUSchedulingSimulator
 ```
 Open:
 ```bash
